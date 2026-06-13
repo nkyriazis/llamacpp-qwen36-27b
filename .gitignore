@@ -1,0 +1,5 @@
+# Large model binaries (download separately)
+*.gguf
+
+# Environment (contains local overrides)
+.env

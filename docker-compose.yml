@@ -1,0 +1,60 @@
+services:
+  llama-cpp:
+    build:
+      context: .
+      dockerfile: llama-cpp.Dockerfile
+      args:
+        LLAMA_CPP_REF: ${LLAMA_CPP_REF:-master}
+        CUDA_ARCH: ${LLAMA_CUDA_ARCH:-120a}
+    runtime: nvidia
+    ipc: host
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    volumes:
+      - ./models:/models
+    command:
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --models-dir
+      - /models
+      - --models-preset
+      - /models/models.ini
+      - --models-max
+      - ${LLAMA_MODELS_MAX:-1}
+      - --models-autoload
+      - -ngl
+      - "999"
+      - --parallel
+      - ${LLAMA_PARALLEL:-3}
+      - --ctx-size
+      - ${LLAMA_CTX_SIZE:-262144}
+      - --jinja
+      - --cache-type-k
+      - q4_0
+      - --cache-type-v
+      - q4_0
+      - --reasoning
+      - off
+      - --min-p
+      - "0.05"
+      - --flash-attn
+      - "on"
+      - --mlock
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8080/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s

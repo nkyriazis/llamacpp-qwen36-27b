@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+docker compose ps
+curl -fsS http://localhost:8080/health
+echo
+curl -fsS http://localhost:8080/models | grep -q 'qwen3.6-27b-local'
+echo "runtime check passed"
