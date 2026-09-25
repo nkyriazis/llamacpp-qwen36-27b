@@ -15,6 +15,9 @@ conversation's requests still extend each other exactly:
   2. Lines starting with "x-anthropic-billing-header:" are removed from the system prompt. They
      carry a per-session value that sits early in the rendered prompt and would stop llama.cpp from
      reusing the cached prefix across sessions (i.e. for every new subagent).
+llama.cpp's context-overflow error is rewritten into Anthropic's "prompt is too long" error, which
+Claude Code recognises and answers by compacting and retrying. Passed through as-is, it kills the
+request (a subagent then dies mid-task).
 
 GET /router/health is answered by the router itself (never forwarded) with its routing config.
 
@@ -110,6 +113,20 @@ def rewrite_local(body):
     return json.dumps(req, ensure_ascii=False).encode(), len(messages), conv
 
 
+def translate_error(status, body):
+    """Map llama.cpp's exceed_context_size_error to the error Anthropic's API returns for it."""
+    try:
+        err = json.loads(body).get("error", {})
+    except (ValueError, AttributeError):
+        return body
+    overflow = isinstance(err, dict) and (err.get("type") == "exceed_context_size_error"
+                                          or "exceeds the available context size" in str(err.get("message", "")))
+    if status == 400 and overflow:
+        msg = f"prompt is too long: {err.get('n_prompt_tokens')} tokens > {err.get('n_ctx')} maximum"
+        return json.dumps({"type": "error", "error": {"type": "invalid_request_error", "message": msg}}).encode()
+    return body
+
+
 def connect(u):
     cls = http.client.HTTPSConnection if u.scheme == "https" else http.client.HTTPConnection
     return cls(u.hostname, u.port, timeout=3600)
@@ -158,6 +175,16 @@ class Router(http.server.BaseHTTPRequestHandler):
         except OSError as e:
             self.send_error(502, f"upstream {up.netloc}: {e}")
             return
+        if local and resp.status >= 400:
+            err_body = translate_error(resp.status, resp.read())
+            conn.close()
+            self.send_response(resp.status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(err_body)))
+            self.end_headers()
+            self.wfile.write(err_body)
+            self.log_request_meta(t0, local, model, resp.status, n_messages, conv, b"")
+            return
         self.send_response(resp.status)
         for k, v in resp.getheaders():
             if k.lower() not in HOP:
@@ -177,17 +204,21 @@ class Router(http.server.BaseHTTPRequestHandler):
             pass
         finally:
             conn.close()
-        if LOG:
-            rec = {"t": round(t0, 3), "dur": round(time.time() - t0, 2), "route": "local" if local else "remote",
-                   "method": self.command, "path": self.path.split("?")[0], "model": model,
-                   "status": resp.status, "messages": n_messages, "conv": conv}
-            for m in re.finditer(rb'"usage":(\{[^}]*\})', captured):
-                try:
-                    rec.setdefault("usage", {}).update(json.loads(m.group(1)))
-                except ValueError:
-                    pass
-            with log_lock, open(LOG, "a") as f:
-                f.write(json.dumps(rec) + "\n")
+        self.log_request_meta(t0, local, model, resp.status, n_messages, conv, captured)
+
+    def log_request_meta(self, t0, local, model, status, n_messages, conv, captured):
+        if not LOG:
+            return
+        rec = {"t": round(t0, 3), "dur": round(time.time() - t0, 2), "route": "local" if local else "remote",
+               "method": self.command, "path": self.path.split("?")[0], "model": model,
+               "status": status, "messages": n_messages, "conv": conv}
+        for m in re.finditer(rb'"usage":(\{[^}]*\})', captured):
+            try:
+                rec.setdefault("usage", {}).update(json.loads(m.group(1)))
+            except ValueError:
+                pass
+        with log_lock, open(LOG, "a") as f:
+            f.write(json.dumps(rec) + "\n")
 
     do_GET = do_POST = do_HEAD = do_PUT = do_DELETE = do_PATCH = handle_any
 

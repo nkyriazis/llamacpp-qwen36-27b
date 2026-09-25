@@ -92,6 +92,19 @@ try:
         ok = ok and (ev is None or ev == new)
         failed += not ok
         print(f"{name:44s} {expect:8s} {cached:>7} {new:>6} {ev if ev is not None else '-':>7} {wall:>5.2f}s  {'ok' if ok else 'FAIL'}")
+    # A prompt larger than the server's context must come back as Anthropic's "prompt is too long",
+    # which Claude Code answers by compacting. Anything else makes a subagent die mid-task.
+    n_ctx = json.load(urllib.request.urlopen(LLAMA + "/props", timeout=10))["default_generation_settings"]["n_ctx"]
+    big = {"model": alias, "max_tokens": 16, "messages": [{"role": "user", "content": "word " * (n_ctx + 2048)}]}
+    try:
+        urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}/v1/messages", json.dumps(big).encode(),
+                               {"content-type": "application/json", "anthropic-version": "2023-06-01"}), timeout=900)
+        ok, got = False, "no error"
+    except urllib.error.HTTPError as e:
+        got = e.read().decode(errors="replace")
+        ok = e.code == 400 and "prompt is too long" in got
+    failed += not ok
+    print(f"{'context overflow -> prompt is too long':44s} {'error':8s} {'':>7} {'':>6} {'':>7} {'':>6}  {'ok' if ok else 'FAIL: ' + got[:120]}")
 finally:
     router.terminate()
 print("cache self-test", "passed" if not failed else f"FAILED ({failed} case(s))")

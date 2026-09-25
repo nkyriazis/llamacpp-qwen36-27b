@@ -54,6 +54,24 @@ All Claude Code-specific handling is in `router.py` and works on the API structu
 | three tasks | 3 slots | Opus launched 3 workers at once. They interleaved (`ABCAABBCC`), each follow-up was 80–99% from cache, and 19 tests pass. |
 | three tasks | 1 slot | Opus ran the workers one after another (`AAABBBBBCCCCCC`) from the description alone, without the hard cap: "those agents can only run one at a time". 24 tests pass. |
 
+## Context windows: how Claude Code and Qwen agree
+
+Claude Code doesn't know Qwen's window, and llama.cpp enforces its own. Two mechanisms keep a subagent from dying mid-task.
+
+1. **Proactive compaction.** The launcher sets `CLAUDE_CODE_MAX_CONTEXT_TOKENS` to the server's context ÷ slots. Claude Code then compacts before each request once the conversation is near window − 32K (it keeps room for a full-size reply) − a small buffer. That's about 225K on the 262K default.
+2. **Reactive compaction.** If a request still overflows, llama.cpp rejects it with its own `exceed_context_size_error`. Claude Code doesn't recognize that error, so the router rewrites it into Anthropic's `prompt is too long: N tokens > M maximum`. Claude Code answers that by compacting and retrying. `cache-selftest` checks the rewrite.
+
+Tested with the server at a 64K window, and one worker told to read 12 files (~265K tokens):
+
+| run | Claude Code told | router rewrite | result |
+|---|---|---|---|
+| A | 200K | no | the worker died on its first overflow (`request (96,527 tokens) exceeds the available context size`), and the orchestrator gave up |
+| B | 64K (the truth) | no | it compacted at 34K and continued. A first worker still died, because one step of parallel reads jumped from 3K to 96K |
+| C | 200K | yes | Claude Code recognized the error and retried, but a brand-new worker with one oversized step has nothing to compact |
+| D | 200K | yes | one worker read all 12 files through 13 overflows, each recovered by compaction |
+
+What compaction can't fix is a single step larger than the whole window. The worker's instructions therefore say to read big files in pieces, not to batch large reads, and not to echo file contents. In D the worker also once hit the 32K output cap by echoing file contents. After one compaction it also lost track and stopped early, until the orchestrator nudged it. So compaction on Qwen keeps the mechanics working, but how well its summaries preserve the task is a quality question.
+
 ## How cache numbers were verified
 
 Three independent signals, which must agree:
@@ -118,5 +136,5 @@ With one slot, llama.cpp picks the slot by longest common prefix. When a hybrid 
 ## Not verified yet
 
 - **Interactive (TUI) mode.** All runs used `claude -p`. Interactive mode's side calls go to Anthropic in hybrid mode.
-- **Long subagent sessions:** near the assumed window, subagent compaction on the local model, and a full shared KV pool.
+- **Long subagent sessions at the real 262K window.** Compaction was tested at 64K (above), and the mechanism is the same, but it hasn't run end to end at 262K. A full shared KV pool with `LLAMA_PARALLEL` > 1 is also untested.
 - **Subscription terms.** The Claude Code gateway docs describe using subscription login through a gateway set as `ANTHROPIC_BASE_URL`, and the router is a local passthrough for your own traffic. The docs don't explicitly cover this case.
