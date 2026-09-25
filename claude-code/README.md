@@ -12,6 +12,8 @@ claude (main session, Opus) ──► router :8098 ──┬─ model == served 
 
 ## Use
 
+**For your own traffic only.** The router passes your own Claude Code requests to Anthropic unchanged, using `ANTHROPIC_BASE_URL` the way [Anthropic's LLM gateway docs](https://code.claude.com/docs/en/llm-gateway) describe. Don't use it to route anyone else's credentials, and check [Anthropic's terms](https://code.claude.com/docs/en/legal-and-compliance) for your plan.
+
 ```
 ./scripts/up                               # llama.cpp and the claude-router service
 claude-code/claude-qwen                    # hybrid: normal login, plus the qwen-worker subagent
@@ -88,7 +90,7 @@ Measured 2026-09-25 with Claude Code 2.1.282 and llama.cpp cd74ef6. The runs use
 **1. Out of the box, every request fails.**
 - **What Claude Code sends.** Two kinds of system messages inside `messages`: a `# Environment` block after the first user turn, and a `<total_tokens>` note after every tool result.
 - **Why it fails.** Qwen's template raises `System message must be at the beginning`, so llama.cpp returns HTTP 500 and Claude Code retries for about 3 minutes.
-- **No env var fixes it.** The behaviour is decided by a server-side feature flag. `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` doesn't turn it off, and the only related env var, `CLAUDE_CODE_FORCE_MID_CONVERSATION_SYSTEM`, can only force it on.
+- **No setting we found turns it off.** `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` doesn't stop these messages.
 - **The fix.** The router folds these messages into user turns. The result is still append-only, so a conversation's requests keep extending each other exactly.
 
 **2. Within one session, the prefix cache works.**
@@ -129,8 +131,8 @@ With one slot, llama.cpp picks the slot by longest common prefix. When a hybrid 
 - `--checkpoint-min-step` only spaces checkpoints; it doesn't add any during prefill. They are placed at user-message starts and at n−(4+ubatch) and n−4, per `server-context.cpp`.
 - The default 32 checkpoints per slot is enough. Each is about 210 MB of host RAM.
 
-**8. Env var notes (checked against the 2.1.282 binary).**
-- `DISABLE_NON_ESSENTIAL_MODEL_CALLS`, still quoted in guides, no longer exists.
+**8. Env var notes.**
+- `DISABLE_NON_ESSENTIAL_MODEL_CALLS`, still quoted in guides, isn't in the current Claude Code docs, so we don't rely on it.
 - A subagent's `model:` accepts any string behind a custom base URL, and `--agents` accepts `model` and `tools`.
 
 ## Not verified yet

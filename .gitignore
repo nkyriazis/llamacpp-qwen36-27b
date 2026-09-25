@@ -5,3 +5,7 @@
 .env
 .env.*
 !.env.example
+
+# Personal / local tooling
+.vscode/
+.agent_artifacts/

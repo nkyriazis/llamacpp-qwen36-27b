@@ -27,8 +27,9 @@ if [[ "$missing" -ne 0 ]]; then
   exit 1
 fi
 
-if grep -RInE '/home/kyriazis/work/local_llm|\.{2}/local_llm' docker-compose.yml .env .env.example llama-cpp.Dockerfile >/tmp/self_contained_hits.txt; then
-  echo "found external path references:" >&2
+# Config must not point outside this folder (absolute host paths or parent directories).
+if grep -nE '(^|[ "=:])(/home/|/Users/|\.\./)' docker-compose.yml .env.example llama-cpp.Dockerfile >/tmp/self_contained_hits.txt; then
+  echo "found references outside this folder:" >&2
   cat /tmp/self_contained_hits.txt >&2
   exit 1
 fi

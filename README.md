@@ -4,6 +4,8 @@ Standalone llama.cpp stack for Qwen 27B models (default: **Qwen3.8-27B**, with Q
 
 This folder is intended to run independently, without any reference to another repository folder.
 
+It also runs Claude Code with local Qwen subagents behind an Anthropic-hosted main session (see [claude-code/README.md](claude-code/README.md) and the short write-up in [docs/](docs/qwen-subagents-for-claude-code.md)). The router passes your own Claude Code traffic to Anthropic unchanged, and is meant for your own use.
+
 ## Contents
 
 - docker-compose.yml: server flags; every tunable is read from `.env`
