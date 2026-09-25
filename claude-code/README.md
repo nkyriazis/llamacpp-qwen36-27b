@@ -24,6 +24,17 @@ claude-code/cache-selftest                 # controlled cache checks against the
 
 Ask the main session to delegate, e.g. "use qwen-worker to add tests for X". To keep a separate Claude Code profile, set `CLAUDE_CONFIG_DIR=/some/dir` before running the launcher.
 
+### Before you start
+
+- **Run it from your project.** The launcher works from any directory, so `cd` into the project and run it by full path, or symlink it onto your PATH (`ln -s "$PWD/claude-code/claude-qwen" ~/.local/bin/claude-qwen`). Plain `claude` is unaffected.
+- **Only `qwen-worker` is local.** Built-in agents (Explore, general-purpose) and the main session stay on Anthropic. Ask for the worker by name.
+- **One worker at a time on the default 1 slot.** Parallel or background workers evict each other's cache and run about 3× slower (finding 4). Opus follows the worker's description. `CLAUDE_QWEN_STRICT_SERIAL=1` makes it a hard cap, for all subagents.
+- **Keep other GPU apps closed.** The server uses about 30.2 of 32.6 GB of VRAM at 262K. Games, Steam or other CUDA work can crash it with out-of-memory.
+- **Workers act with your session's permissions.** They run Bash and edit files, without asking if you use bypass permissions. Work in a git repo, commit before delegating, and review the diff.
+- **Have Opus verify the result.** Ask it to run the tests or read the diff instead of trusting the worker's report. After a compaction, a worker once lost track and stopped early (see the context-window section).
+- **After upgrading Claude Code, run `cache-selftest`.** A new version can add a per-session value that silently breaks caching. Check `cache-report` now and then. `scripts/update-llamacpp` already runs the self-test for llama.cpp updates.
+- **After a reboot**, both services restart with Docker (`restart: unless-stopped`). If the launcher says it can't reach them, run `./scripts/up`.
+
 ### Parallel or serial
 
 There is one setting, `LLAMA_PARALLEL` in `.env`. The launcher reads the running server's `/props` (slot count, context size, model alias), so the Claude side always matches the server.
