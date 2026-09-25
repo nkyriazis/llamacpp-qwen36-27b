@@ -18,4 +18,9 @@ grep -q 'OK' <<<"$reply" || { echo "unexpected completion: $reply" >&2; exit 1; 
 reply="$(curl -fsS http://localhost:8080/v1/chat/completions -H 'Content-Type: application/json' \
   -d '{"messages":[{"role":"user","content":"What is 17*23? Reply with the number only."}],"max_tokens":2048}')"
 grep -q '391' <<<"$reply" || { echo "wrong arithmetic answer: $reply" >&2; exit 1; }
-echo "runtime check passed ($alias)"
+# Router (claude-router service): healthy, routes the served alias, and reaches the model end to end.
+curl -fsS http://127.0.0.1:8098/router/health | grep -q "\"$alias\"" || { echo "router is not routing $alias" >&2; exit 1; }
+reply="$(curl -fsS http://127.0.0.1:8098/v1/messages -H 'Content-Type: application/json' -H 'anthropic-version: 2023-06-01' \
+  -d "{\"model\":\"$alias\",\"max_tokens\":2048,\"messages\":[{\"role\":\"user\",\"content\":\"What is 17*23? Reply with the number only.\"}]}")"
+grep -q '391' <<<"$reply" || { echo "router path gave an unexpected answer: $reply" >&2; exit 1; }
+echo "runtime check passed ($alias, direct and via router)"

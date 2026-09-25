@@ -16,20 +16,32 @@ conversation's requests still extend each other exactly:
      carry a per-session value that sits early in the rendered prompt and would stop llama.cpp from
      reusing the cached prefix across sessions (i.e. for every new subagent).
 
+GET /router/health is answered by the router itself (never forwarded) with its routing config.
+
 Env:
-  ROUTER_PORT      listen port on 127.0.0.1                      (default 8098)
+  ROUTER_HOST      listen address                                 (default 127.0.0.1)
+  ROUTER_PORT      listen port                                    (default 8098)
   LOCAL_UPSTREAM   llama.cpp base URL                             (default http://127.0.0.1:8080)
   REMOTE_UPSTREAM  Anthropic base URL                             (default https://api.anthropic.com)
+  LOCAL_MODEL      comma-separated model names for the local route (exact match; takes precedence)
   LOCAL_MODEL_RE   regex on body.model selecting the local route  (default ^qwen)
   ROUTER_LOG       JSONL file for per-request metadata (route, model, status, token usage and a
                    conversation hash for local calls); never headers or content. Unset = no log.
 """
 import hashlib, http.client, http.server, json, os, re, threading, time, urllib.parse
 
+HOST = os.environ.get("ROUTER_HOST", "127.0.0.1")
 PORT = int(os.environ.get("ROUTER_PORT", "8098"))
 LOCAL = urllib.parse.urlsplit(os.environ.get("LOCAL_UPSTREAM", "http://127.0.0.1:8080"))
 REMOTE = urllib.parse.urlsplit(os.environ.get("REMOTE_UPSTREAM", "https://api.anthropic.com"))
+LOCAL_MODELS = {m.strip() for m in os.environ.get("LOCAL_MODEL", "").split(",") if m.strip()}
 LOCAL_RE = re.compile(os.environ.get("LOCAL_MODEL_RE", "^qwen"))
+
+
+def is_local(model):
+    if not model:
+        return False
+    return model in LOCAL_MODELS if LOCAL_MODELS else bool(LOCAL_RE.search(model))
 LOG = os.environ.get("ROUTER_LOG")
 BILLING_LINE = re.compile(r"^x-anthropic-billing-header:.*(?:\n|$)", re.M)
 HOP = {"host", "connection", "keep-alive", "transfer-encoding", "content-length", "accept-encoding", "proxy-connection"}
@@ -109,7 +121,19 @@ class Router(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
+    def health(self):
+        body = json.dumps({"status": "ok", "local_models": sorted(LOCAL_MODELS),
+                           "local_model_re": None if LOCAL_MODELS else LOCAL_RE.pattern,
+                           "local_upstream": LOCAL.geturl(), "remote_upstream": REMOTE.geturl()}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def handle_any(self):
+        if self.command == "GET" and self.path == "/router/health":
+            return self.health()
         n = int(self.headers.get("content-length") or 0)
         body = self.rfile.read(n) if n else b""
         model = None
@@ -118,7 +142,7 @@ class Router(http.server.BaseHTTPRequestHandler):
                 model = json.loads(body).get("model")
             except (ValueError, AttributeError):
                 pass
-        local = bool(model and LOCAL_RE.search(model))
+        local = is_local(model)
         up = LOCAL if local else REMOTE
         n_messages = conv = None
         if local:
@@ -169,5 +193,6 @@ class Router(http.server.BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    print(f"router on 127.0.0.1:{PORT}: model~/{LOCAL_RE.pattern}/ -> {LOCAL.geturl()}, else -> {REMOTE.geturl()}", flush=True)
-    http.server.ThreadingHTTPServer(("127.0.0.1", PORT), Router).serve_forever()
+    rule = ",".join(sorted(LOCAL_MODELS)) if LOCAL_MODELS else f"~/{LOCAL_RE.pattern}/"
+    print(f"router on {HOST}:{PORT}: model {rule} -> {LOCAL.geturl()}, else -> {REMOTE.geturl()}", flush=True)
+    http.server.ThreadingHTTPServer((HOST, PORT), Router).serve_forever()

@@ -11,7 +11,7 @@ This folder is intended to run independently, without any reference to another r
 - .env.example: the tuned configuration, with the measurements behind it
 - models/Qwen3.8-27B/: `Qwen3.8-27B-UD-Q4_K_XL.gguf`, `mmproj-F16.gguf` (plus optional UD-Q5_K_XL / UD-Q6_K)
 - models/Qwen3.6-27B/: `Qwen3.6-27B-Q4_K_M.gguf`, `mmproj-F16.gguf`
-- claude-code/: run Claude Code with local Qwen subagents (router, agent definition, launcher); see claude-code/README.md
+- claude-code/: run Claude Code with local Qwen subagents; the router runs as the `claude-router` service, and `claude-code/claude-qwen` is the launcher. See claude-code/README.md
 - scripts/up, scripts/down, scripts/verify-self-contained, scripts/verify-runtime, scripts/bench, scripts/update-llamacpp
 
 ## Prerequisites
@@ -33,7 +33,7 @@ The MTP (multi-token prediction) head is embedded in the GGUF, so no separate dr
 
 ## Run / verify / stop
 
-1. `./scripts/up` (copies `.env.example` to `.env` if missing, then builds and starts the server)
+1. `./scripts/up` (copies `.env.example` to `.env` if missing, then builds and starts llama.cpp and the Claude Code router)
 2. `./scripts/verify-self-contained` and `./scripts/verify-runtime`
 3. `./scripts/bench`: decode/prefill speed and MTP acceptance
 4. `./scripts/down`
@@ -48,14 +48,15 @@ The OpenAI-compatible API is at `http://localhost:8080/v1`, and the served model
 
 | Setup | VRAM | Decode (short ctx) | Notes |
 |---|---|---|---|
-| UD-Q4_K_XL, 200K ctx, q8_0 KV, MTP n=3 (**default**) | 30.2 GB idle / 30.3 GB at 203K prompt | 118–146 tok/s | vision on GPU (0.9 s/image), 64 tok/s decode at 203K depth |
+| UD-Q4_K_XL, 262K ctx, K q8_0 / V q4_0, 1 slot, MTP n=3 (**default**) | 27.9 GB llama.cpp, 30.6 GB total at a 242K prompt | 120–158 tok/s | 3/3 planted facts recalled at 242K, 74 tok/s decode there |
+| UD-Q4_K_XL, 200K ctx, q8_0 KV (previous default) | 30.2 GB idle / 30.3 GB at 203K prompt | 118–146 tok/s | vision on GPU (0.9 s/image), 64 tok/s decode at 203K depth |
 | same without MTP | | ~70 tok/s | |
 | UD-Q5_K_XL, 200K, vision on CPU, ub 512 | 31.2 GB at 162K prompt | 101–136 tok/s | vision 16 s/image, ~1.4 GB slack |
 | UD-Q6_K, 128K, vision on GPU | 30.8 GB idle | 100–131 tok/s | cannot reach 200K with q8_0 KV |
 
-- KV cache costs about 47 KiB/token at q8_0 (only 16 of the 64 layers use full attention). q8_0 is kept for long-context accuracy, and a 203K-token needle test passed.
+- KV cache costs about 47 KiB/token at q8_0 (only 16 of the 64 layers use full attention). The full native 262K context fits only with the V half at q4_0 (K stays q8_0); 262K at q8_0/q8_0 crash-loops with CUDA OOM. Recall was checked at 242K tokens (3 facts at 10/50/90% depth, all verbatim).
 - MTP `n-max` sweep: 2 is weaker on code, 4–5 are weaker on prose, so 3 is the best overall.
-- 3 slots over one unified KV pool (`LLAMA_PARALLEL=3`). Parallel agents keep their own caches; single-stream speed (MTP included) is unchanged. ubatch is 512 (−0.5 GB for −2% prefill); llama.cpp uses about 28.6 GB after first use. Budget the desktop at ≤ 2.5 GB: with ubatch 1024 and a ~3 GB desktop, the server hit CUDA OOM on its first decode.
+- 1 slot by default, so one conversation gets the whole context. `LLAMA_PARALLEL=3` lets parallel agents keep their own caches (single-stream speed unchanged) but they share the pool, and each slot costs ~0.5 GB. ubatch is 512 (−0.5 GB for −2% prefill). Budget the desktop at ≤ 2.5 GB: with ubatch 1024 and a ~3 GB desktop, the server hit CUDA OOM on its first decode.
 - `LLAMA_CACHE_RAM` (32 GB host RAM) keeps prompt states for several long sessions, so switching between them doesn't re-prefill.
 - Desktop VRAM use (~2.2 GB here) directly limits context. Running headless frees room for about 224K.
 - Thinking is on, with `reasoning_effort=medium`. The template's own default is `xhigh`, which never loops but spends 10–24K tokens thinking on open-ended coding prompts (3 of 3 runs hit a 24K cap on one of them). With medium, 27 of 27 loop-prone test prompts finish on their own with 1–4K tokens of thinking. Override per request with `"chat_template_kwargs": {"reasoning_effort": "low"|"xhigh"}`. `LLAMA_REASONING_BUDGET` (16K) is a safety cap that closes thinking and forces an answer.

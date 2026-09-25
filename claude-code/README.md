@@ -1,6 +1,8 @@
 # Claude Code with local Qwen subagents
 
-Your main Claude Code session stays on Anthropic (Opus). Subagents run on the model this stack serves. Nothing is installed into `~/.claude` or into your projects: the launcher only sets environment variables for its own process and passes the agent definitions with `--agents`. Router state and logs stay in `claude-code/.state/`, which is git-ignored.
+Your main Claude Code session stays on Anthropic (Opus). Subagents run on the model this stack serves. Nothing is installed into `~/.claude` or into your projects: the launcher only sets environment variables for its own process and passes the agent definitions with `--agents`.
+
+The router is a small custom proxy (`router.py`, standard-library Python, about 200 lines). It runs as the `claude-router` service of this stack (`python:3.13-slim`, about 30 MB of RAM), listens on `127.0.0.1:8098` only, and starts and stops with the stack. Its request log (metadata only) is `claude-code/.state/router.jsonl`, which is git-ignored.
 
 ```
 claude (main session, Opus) ──► router :8098 ──┬─ model == served alias ─► llama.cpp :8080 (/v1/messages)
@@ -11,7 +13,7 @@ claude (main session, Opus) ──► router :8098 ──┬─ model == served 
 ## Use
 
 ```
-./scripts/up                               # llama.cpp stack
+./scripts/up                               # llama.cpp and the claude-router service
 claude-code/claude-qwen                    # hybrid: normal login, plus the qwen-worker subagent
 claude-code/claude-qwen --local            # everything on the local model (no Anthropic traffic)
 claude-code/cache-report                   # prompt-cache health of the local traffic so far
@@ -26,8 +28,8 @@ There is one setting, `LLAMA_PARALLEL` in `.env`. The launcher reads the running
 
 | `LLAMA_PARALLEL` | server | Claude Code side |
 |---|---|---|
-| `3` (default) | 3 slots, one shared 200K KV pool | worker description says up to 3 in parallel; assumed window 68K (200K / 3) |
-| `1` | 1 slot, full 200K | worker description says one at a time; assumed window 200K. `CLAUDE_QWEN_STRICT_SERIAL=1` also sets `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=1`, which is a hard cap but applies to *all* subagents, including Anthropic-hosted ones. Claude Code has no per-agent concurrency setting. |
+| `1` (default) | 1 slot, the full 262K context | worker description says one at a time; assumed window 262K. `CLAUDE_QWEN_STRICT_SERIAL=1` also sets `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=1`, which is a hard cap but applies to *all* subagents, including Anthropic-hosted ones. Claude Code has no per-agent concurrency setting. |
+| `3` | 3 slots sharing one 262K KV pool, ~1 GB more VRAM | worker description says up to 3 in parallel; assumed window 87K (262K / 3) |
 
 Serial mode matters because with one slot, llama.cpp can't keep two conversations cached on this hybrid model. Parallel workers would evict each other's state on every turn (finding 4).
 
@@ -38,7 +40,7 @@ All Claude Code-specific handling is in `router.py` and works on the API structu
 - **Mid-conversation system messages.** Claude Code sends system messages inside `messages`. The router folds them into the neighbouring user turn as `<system-reminder>` text, which any chat template accepts.
 - **Attribution/billing line.** The router removes any `x-anthropic-billing-header:` line from the system prompt of local requests, whatever its format.
 - **Auth.** The router strips auth on the local route and passes everything through untouched on the remote route.
-- **Model name, slot count, context.** The launcher reads all three from `/props` at start. The router is restarted if the served alias changes.
+- **Model name, slot count, context.** The launcher reads all three from `/props` at start. The router routes `LLAMA_ALIAS` from the same `.env`. If the two ever disagree, the launcher refuses to start and tells you to run `./scripts/up`.
 - **Env vars.** The launcher only uses documented ones: `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (only affects models Claude Code doesn't recognize), `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` (opt-in), and the `ANTHROPIC_*MODEL*` variables plus `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` in `--local` mode.
 - **Regressions.** A Claude Code or llama.cpp upgrade can still add something that breaks caching. Two tools catch it:
   - `cache-report` checks your real traffic: follow-up requests should be >90% from cache, and it lists any that weren't.

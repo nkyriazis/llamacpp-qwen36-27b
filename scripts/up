@@ -8,4 +8,8 @@ if [[ ! -f .env ]]; then
   cp .env.example .env
 fi
 
+# The router (claude-router service) writes its logs here as the invoking user.
+mkdir -p claude-code/.state
+export HOST_UID="$(id -u)" HOST_GID="$(id -g)"
+
 exec docker compose up -d --build

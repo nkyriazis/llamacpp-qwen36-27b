@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Claude Code with local subagents served by this stack's llama.cpp. Only this process's environment
-# is changed: nothing is written to ~/.claude or to the project. Router state/logs stay in ./.state.
+# is changed: nothing is written to ~/.claude or to the project. Needs the stack running (./scripts/up
+# starts llama.cpp and the claude-router service).
 #
 #   claude-code/claude-qwen [claude args...]          hybrid: normal (Anthropic) main session, plus
 #                                                     the agents in agents.json on the local model
@@ -13,14 +14,13 @@
 #
 # Env overrides:
 #   CLAUDE_QWEN_LLAMA          llama.cpp base URL                    (default http://127.0.0.1:8080)
-#   CLAUDE_QWEN_ROUTER_PORT    router port                           (default 8098)
+#   CLAUDE_QWEN_ROUTER_PORT    router port on localhost              (default 8098)
 #   CLAUDE_QWEN_CONTEXT        window Claude Code assumes for the local model
 #   CLAUDE_QWEN_STRICT_SERIAL  1 = with a 1-slot server, also cap Claude Code to one subagent at a time
 #                              (CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=1; this applies to ALL subagents)
 set -euo pipefail
 
 here="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-state="$here/.state"
 port="${CLAUDE_QWEN_ROUTER_PORT:-8098}"
 llama="${CLAUDE_QWEN_LLAMA:-http://127.0.0.1:8080}"
 
@@ -40,34 +40,14 @@ p = json.load(sys.stdin)
 print(p["model_alias"], p.get("total_slots", 1), p["default_generation_settings"]["n_ctx"])' <<<"$props")
 context="${CLAUDE_QWEN_CONTEXT:-$((n_ctx / slots))}"
 
-# Router: (re)start it if it is not running or was started for a different model.
-mkdir -p "$state"
-pidfile="$state/router-$port.pid" cfgfile="$state/router-$port.model"
-running=""
-if [[ -f "$pidfile" ]] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
-  running="$(cat "$cfgfile" 2>/dev/null || true)"
-  if [[ "$running" != "$alias" ]]; then
-    kill "$(cat "$pidfile")" 2>/dev/null || true
-    running=""
-    sleep 0.3
-  fi
-fi
-if [[ -z "$running" ]]; then
-  alias_re="$(python3 -c 'import re,sys; print("^" + re.escape(sys.argv[1]) + "$")' "$alias")"
-  ROUTER_PORT="$port" LOCAL_UPSTREAM="$llama" LOCAL_MODEL_RE="$alias_re" ROUTER_LOG="$state/router.jsonl" \
-    nohup python3 "$here/router.py" >"$state/router-$port.out" 2>&1 &
-  echo $! >"$pidfile"
-  echo "$alias" >"$cfgfile"
-  for _ in $(seq 50); do
-    [[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 1 "http://127.0.0.1:$port/" || true)" != "000" ]] && break
-    sleep 0.1
-  done
-  if ! kill -0 "$(cat "$pidfile")" 2>/dev/null; then
-    rm -f "$pidfile" "$cfgfile"
-    echo "claude-qwen: router failed to start on port $port (is another process using it?):" >&2
-    cat "$state/router-$port.out" >&2
-    exit 1
-  fi
+# Router: runs as the claude-router service of this stack (./scripts/up).
+router="$(curl -fsS --max-time 3 "http://127.0.0.1:$port/router/health" 2>/dev/null)" || {
+  echo "claude-qwen: router is not reachable on port $port (start the stack with ./scripts/up)" >&2
+  exit 1
+}
+if ! python3 -c 'import json,sys; sys.exit(sys.argv[1] not in json.loads(sys.argv[2])["local_models"])' "$alias" "$router"; then
+  echo "claude-qwen: router does not route '$alias' to llama.cpp; run ./scripts/up to apply the current .env" >&2
+  exit 1
 fi
 
 # Agent definitions for this server: model = served alias, concurrency guidance = slot count.
