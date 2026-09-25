@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# Move the stack to a newer llama.cpp and roll back automatically if it doesn't pass the checks.
+#
+#   ./scripts/update-llamacpp            # latest llama.cpp release (bNNNNN tag)
+#   ./scripts/update-llamacpp master     # current master HEAD
+#   ./scripts/update-llamacpp <sha|tag>  # a specific commit or tag
+#
+# On success LLAMA_CPP_REF is updated in .env and .env.example (commit the latter).
+# Images are tagged per commit (llamacpp-qwen:<sha>), so rollback does not rebuild.
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+api=https://api.github.com/repos/ggml-org/llama.cpp
+target="${1:-latest}"
+
+resolve_sha() {
+  local ref="$1"
+  if [[ "$ref" == latest ]]; then
+    ref="$(curl -fsS "$api/releases?per_page=1" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["tag_name"])')"
+    echo "latest release: $ref" >&2
+  fi
+  curl -fsS "$api/commits/$ref" | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])'
+}
+
+set_ref() {
+  sed -i "s/^LLAMA_CPP_REF=.*/LLAMA_CPP_REF=$1/" "${@:2}"
+}
+
+wait_healthy() {
+  local deadline=$((SECONDS + 600))
+  until curl -fsS http://localhost:8080/health >/dev/null 2>&1; do
+    if ((SECONDS > deadline)); then return 1; fi
+    if ! docker compose ps --status running --quiet | grep -q .; then return 1; fi
+    sleep 3
+  done
+}
+
+old="$(sed -n 's/^LLAMA_CPP_REF=//p' .env)"
+new="$(resolve_sha "$target")"
+echo "current: $old"
+echo "target:  $new"
+if [[ "$new" == "$old" ]]; then
+  echo "already on $new"
+  exit 0
+fi
+
+rollback() {
+  echo "!! update failed; rolling back to $old" >&2
+  docker compose logs --tail 30 >&2 || true
+  set_ref "$old" .env
+  if docker image inspect "llamacpp-qwen:$old" >/dev/null 2>&1; then
+    docker compose up -d
+  else
+    docker compose up -d --build
+  fi
+  wait_healthy && echo "rolled back to $old" >&2
+  exit 1
+}
+
+set_ref "$new" .env
+docker compose up -d --build || rollback
+wait_healthy || rollback
+./scripts/verify-runtime || rollback
+docker compose logs 2>&1 | grep -q 'creating MTP draft context' || {
+  grep -q '^LLAMA_SPEC_TYPE=draft-mtp' .env && { echo "MTP did not initialise" >&2; rollback; }
+}
+./scripts/bench || rollback
+
+set_ref "$new" .env.example
+echo
+echo "updated llama.cpp $old -> $new"
+echo "compare the bench numbers with README.md, then commit .env.example"
+echo "old image can be removed with: docker rmi llamacpp-qwen:$old"

@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Decode/prefill speed and MTP draft acceptance against the running server.
+set -euo pipefail
+exec python3 "$(dirname "${BASH_SOURCE[0]}")/bench-client.py" "${1:-http://localhost:8080}"

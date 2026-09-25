@@ -6,44 +6,72 @@ services:
       args:
         LLAMA_CPP_REF: ${LLAMA_CPP_REF:-master}
         CUDA_ARCH: ${LLAMA_CUDA_ARCH:-120a}
+    image: llamacpp-qwen:${LLAMA_CPP_REF:-master}
     runtime: nvidia
     ipc: host
     ports:
       - "8080:8080"
-    env_file:
-      - .env
     volumes:
-      - ./models:/models
+      - ./models:/models:ro
     command:
       - --host
       - 0.0.0.0
       - --port
       - "8080"
-      - --models-dir
-      - /models
-      - --models-preset
-      - /models/models.ini
-      - --models-max
-      - ${LLAMA_MODELS_MAX:-1}
-      - --models-autoload
+      - --model
+      - ${LLAMA_MODEL:?set LLAMA_MODEL in .env}
+      - --mmproj
+      - ${LLAMA_MMPROJ:?set LLAMA_MMPROJ in .env}
+      - --alias
+      - ${LLAMA_ALIAS:-qwen3.8-27b}
       - -ngl
-      - "999"
+      - all
+      - --fit
+      - "off"
       - --parallel
-      - ${LLAMA_PARALLEL:-3}
+      - ${LLAMA_PARALLEL:-1}
       - --ctx-size
-      - ${LLAMA_CTX_SIZE:-262144}
+      - ${LLAMA_CTX_SIZE:-204800}
+      - --batch-size
+      - ${LLAMA_BATCH:-2048}
+      - --ubatch-size
+      - ${LLAMA_UBATCH:-1024}
       - --jinja
-      - --cache-type-k
-      - q4_0
-      - --cache-type-v
-      - q4_0
-      - --reasoning
-      - off
-      - --min-p
-      - "0.05"
       - --flash-attn
       - "on"
-      - --mlock
+      - --cache-type-k
+      - ${LLAMA_CACHE_TYPE_K:-q8_0}
+      - --cache-type-v
+      - ${LLAMA_CACHE_TYPE_V:-q8_0}
+      - --cache-ram
+      - ${LLAMA_CACHE_RAM:-32768}
+      # Speculative decoding via the MTP head embedded in the GGUF.
+      # Helps single-stream decode only; set LLAMA_SPEC_TYPE=none when LLAMA_PARALLEL > 1.
+      - --spec-type
+      - ${LLAMA_SPEC_TYPE:-draft-mtp}
+      - --spec-draft-n-max
+      - ${LLAMA_SPEC_DRAFT_N_MAX:-3}
+      - --reasoning
+      - ${LLAMA_REASONING:-on}
+      - --reasoning-effort
+      - ${LLAMA_REASONING_EFFORT:-medium}
+      - --reasoning-budget
+      - ${LLAMA_REASONING_BUDGET:-16384}
+      - --reasoning-budget-message
+      - ${LLAMA_REASONING_BUDGET_MESSAGE:-Considering the limited time, I have to give the solution based on the thinking directly now.}
+      # Default sampling (clients may override per request). Qwen-recommended values:
+      #   thinking:     temp 1.0, top-p 0.95, top-k 20, min-p 0, presence 0
+      #   non-thinking: temp 0.7, top-p 0.80, top-k 20, min-p 0, presence 1.5
+      - --temp
+      - ${LLAMA_TEMP:-1.0}
+      - --top-p
+      - ${LLAMA_TOP_P:-0.95}
+      - --top-k
+      - ${LLAMA_TOP_K:-20}
+      - --min-p
+      - ${LLAMA_MIN_P:-0.0}
+      - --presence-penalty
+      - ${LLAMA_PRESENCE_PENALTY:-0.0}
     deploy:
       resources:
         reservations:
@@ -57,4 +85,4 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 120s
+      start_period: 180s

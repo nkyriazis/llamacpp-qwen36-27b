@@ -3,3 +3,5 @@
 
 # Environment (contains local overrides)
 .env
+.env.*
+!.env.example

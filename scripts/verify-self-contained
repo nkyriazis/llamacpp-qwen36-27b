@@ -4,13 +4,15 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
+[[ -f .env ]] || cp .env.example .env
+set -a; source .env; set +a
+
 required=(
   docker-compose.yml
   llama-cpp.Dockerfile
   .env.example
-  models/models.ini
-  models/Qwen3.6-27B-Q4_K_M.gguf
-  models/mmproj-F16.gguf
+  "models/${LLAMA_MODEL#/models/}"
+  "models/${LLAMA_MMPROJ#/models/}"
 )
 
 missing=0
@@ -25,7 +27,7 @@ if [[ "$missing" -ne 0 ]]; then
   exit 1
 fi
 
-if grep -RInE '/home/kyriazis/work/local_llm|\.{2}/local_llm' docker-compose.yml .env .env.example llama-cpp.Dockerfile models/models.ini >/tmp/self_contained_hits.txt; then
+if grep -RInE '/home/kyriazis/work/local_llm|\.{2}/local_llm' docker-compose.yml .env .env.example llama-cpp.Dockerfile >/tmp/self_contained_hits.txt; then
   echo "found external path references:" >&2
   cat /tmp/self_contained_hits.txt >&2
   exit 1

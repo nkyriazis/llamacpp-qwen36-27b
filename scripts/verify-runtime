@@ -4,8 +4,18 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
+set -a; source .env; set +a
+alias="${LLAMA_ALIAS:-qwen3.8-27b}"
+
 docker compose ps
 curl -fsS http://localhost:8080/health
 echo
-curl -fsS http://localhost:8080/models | grep -q 'qwen3.6-27b-local'
-echo "runtime check passed"
+curl -fsS http://localhost:8080/v1/models | grep -q "\"$alias\"" || { echo "model alias $alias not served" >&2; exit 1; }
+reply="$(curl -fsS http://localhost:8080/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"messages":[{"role":"user","content":"Reply with exactly: OK"}],"max_tokens":1024}')"
+grep -q 'OK' <<<"$reply" || { echo "unexpected completion: $reply" >&2; exit 1; }
+# Coherence check: catches builds that load and run fast but produce garbage.
+reply="$(curl -fsS http://localhost:8080/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"messages":[{"role":"user","content":"What is 17*23? Reply with the number only."}],"max_tokens":2048}')"
+grep -q '391' <<<"$reply" || { echo "wrong arithmetic answer: $reply" >&2; exit 1; }
+echo "runtime check passed ($alias)"
