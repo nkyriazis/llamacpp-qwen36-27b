@@ -11,6 +11,7 @@ This folder is intended to run independently, without any reference to another r
 - .env.example: the tuned configuration, with the measurements behind it
 - models/Qwen3.8-27B/: `Qwen3.8-27B-UD-Q4_K_XL.gguf`, `mmproj-F16.gguf` (plus optional UD-Q5_K_XL / UD-Q6_K)
 - models/Qwen3.6-27B/: `Qwen3.6-27B-Q4_K_M.gguf`, `mmproj-F16.gguf`
+- claude-code/: run Claude Code with local Qwen subagents (router, agent definition, launcher); see claude-code/README.md
 - scripts/up, scripts/down, scripts/verify-self-contained, scripts/verify-runtime, scripts/bench, scripts/update-llamacpp
 
 ## Prerequisites
@@ -54,7 +55,7 @@ The OpenAI-compatible API is at `http://localhost:8080/v1`, and the served model
 
 - KV cache costs about 47 KiB/token at q8_0 (only 16 of the 64 layers use full attention). q8_0 is kept for long-context accuracy, and a 203K-token needle test passed.
 - MTP `n-max` sweep: 2 is weaker on code, 4–5 are weaker on prose, so 3 is the best overall.
-- MTP is a single-stream optimisation. For several concurrent clients, raise `LLAMA_PARALLEL` and set `LLAMA_SPEC_TYPE=none` (the context is split across slots).
+- 3 slots over one unified KV pool (`LLAMA_PARALLEL=3`). Parallel agents keep their own caches; single-stream speed (MTP included) is unchanged. ubatch is 512 (−0.5 GB for −2% prefill); llama.cpp uses about 28.6 GB after first use. Budget the desktop at ≤ 2.5 GB: with ubatch 1024 and a ~3 GB desktop, the server hit CUDA OOM on its first decode.
 - `LLAMA_CACHE_RAM` (32 GB host RAM) keeps prompt states for several long sessions, so switching between them doesn't re-prefill.
 - Desktop VRAM use (~2.2 GB here) directly limits context. Running headless frees room for about 224K.
 - Thinking is on, with `reasoning_effort=medium`. The template's own default is `xhigh`, which never loops but spends 10–24K tokens thinking on open-ended coding prompts (3 of 3 runs hit a 24K cap on one of them). With medium, 27 of 27 loop-prone test prompts finish on their own with 1–4K tokens of thinking. Override per request with `"chat_template_kwargs": {"reasoning_effort": "low"|"xhigh"}`. `LLAMA_REASONING_BUDGET` (16K) is a safety cap that closes thinking and forces an answer.

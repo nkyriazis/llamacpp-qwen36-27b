@@ -5,7 +5,8 @@
 #   ./scripts/update-llamacpp master     # current master HEAD
 #   ./scripts/update-llamacpp <sha|tag>  # a specific commit or tag
 #
-# On success LLAMA_CPP_REF is updated in .env and .env.example (commit the latter).
+# Checks: health, model alias, a coherence answer, MTP initialised, bench, and the prompt-cache
+# self-test (claude-code/cache-selftest). On success LLAMA_CPP_REF is updated in .env and .env.example (commit the latter).
 # Images are tagged per commit (llamacpp-qwen:<sha>), so rollback does not rebuild.
 set -euo pipefail
 
@@ -67,6 +68,7 @@ docker compose logs 2>&1 | grep -q 'creating MTP draft context' || {
   grep -q '^LLAMA_SPEC_TYPE=draft-mtp' .env && { echo "MTP did not initialise" >&2; rollback; }
 }
 ./scripts/bench || rollback
+./claude-code/cache-selftest || rollback
 
 set_ref "$new" .env.example
 echo

@@ -11,6 +11,13 @@ services:
     ipc: host
     ports:
       - "8080:8080"
+    environment:
+      # Prompt-cache tuning for the hybrid (recurrent) model; see README.
+      LLAMA_ARG_CTX_CHECKPOINTS: ${LLAMA_CTX_CHECKPOINTS:-32}
+      LLAMA_ARG_CHECKPOINT_MIN_SPACING_NT: ${LLAMA_CHECKPOINT_MIN_STEP:-8192}
+      # One KV pool shared by all slots (each slot may use up to the full context).
+      LLAMA_ARG_KV_UNIFIED: ${LLAMA_KV_UNIFIED:-1}
+      LLAMA_ARG_LOG_VERBOSITY: ${LLAMA_LOG_VERBOSITY:-3}
     volumes:
       - ./models:/models:ro
     command:
@@ -29,13 +36,13 @@ services:
       - --fit
       - "off"
       - --parallel
-      - ${LLAMA_PARALLEL:-1}
+      - ${LLAMA_PARALLEL:-3}
       - --ctx-size
       - ${LLAMA_CTX_SIZE:-204800}
       - --batch-size
       - ${LLAMA_BATCH:-2048}
       - --ubatch-size
-      - ${LLAMA_UBATCH:-1024}
+      - ${LLAMA_UBATCH:-512}
       - --jinja
       - --flash-attn
       - "on"
@@ -46,7 +53,7 @@ services:
       - --cache-ram
       - ${LLAMA_CACHE_RAM:-32768}
       # Speculative decoding via the MTP head embedded in the GGUF.
-      # Helps single-stream decode only; set LLAMA_SPEC_TYPE=none when LLAMA_PARALLEL > 1.
+      # ~2x decode per stream; measured unchanged with 3 slots.
       - --spec-type
       - ${LLAMA_SPEC_TYPE:-draft-mtp}
       - --spec-draft-n-max

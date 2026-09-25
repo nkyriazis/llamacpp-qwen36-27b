@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+"""Self-test: llama.cpp prompt-cache reuse for Claude Code-shaped requests, through the router.
+
+Starts a private router on a spare port and sends a synthetic request with the features that matter
+(billing line, large system prompt and tool list, a mid-conversation system message). Each case has an
+expected outcome, checked against the API's usage and, when docker is available, against the tokens
+the server says it evaluated. A negative control makes sure a real prefix change is reported as a miss.
+Exit status 0 = all cases passed.
+
+  claude-code/cache-selftest [llama.cpp base URL, default http://127.0.0.1:8080]
+"""
+import copy, json, os, random, re, socket, subprocess, sys, time, urllib.request
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+LLAMA = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8080"
+COMPOSE = os.path.join(HERE, "..", "docker-compose.yml")
+
+alias = json.load(urllib.request.urlopen(LLAMA + "/props", timeout=10))["model_alias"]
+sock = socket.socket(); sock.bind(("127.0.0.1", 0)); port = sock.getsockname()[1]; sock.close()
+router = subprocess.Popen([sys.executable, os.path.join(HERE, "router.py")], stdout=subprocess.DEVNULL,
+                          env={**os.environ, "ROUTER_PORT": str(port), "LOCAL_UPSTREAM": LLAMA,
+                               "LOCAL_MODEL_RE": "^" + re.escape(alias) + "$"})
+
+rng = random.Random(7)
+words = "alpha beta gamma delta file path line token cache agent tool shell read write edit test".split()
+def prose(n): return " ".join(rng.choice(words) for _ in range(n))
+run_id = f"{time.time():.0f}"  # keeps runs from hitting each other's cache
+base = {
+    "model": alias, "max_tokens": 1, "stream": False,
+    "system": [{"type": "text", "text": "x-anthropic-billing-header: cc_version=0.0.0.aaa; cc_entrypoint=cli;"},
+               {"type": "text", "text": f"selftest {run_id}. You are a coding agent. " + prose(1500)}],
+    "tools": [{"name": f"tool_{i}", "description": prose(60),
+               "input_schema": {"type": "object", "properties": {"arg": {"type": "string", "description": prose(20)}}}}
+              for i in range(30)],
+    "messages": [{"role": "user", "content": [{"type": "text", "text": "Task: " + prose(40)}]},
+                 {"role": "system", "content": "# Environment\n" + prose(600)}],
+}
+
+def variant(fn):
+    q = copy.deepcopy(base); fn(q); return q
+def billing(v): return lambda q: q["system"].__setitem__(0, {"type": "text", "text": f"x-anthropic-billing-header: cc_version=0.0.0.{v}; cc_entrypoint=cli;"})
+def task(q): q["messages"][0]["content"][0]["text"] = "Task: " + prose(40)
+def early(q): q["system"][1]["text"] = q["system"][1]["text"].replace("coding agent", "coding  agent", 1)
+
+def server_eval(since):
+    try:
+        log = subprocess.run(["docker", "compose", "-f", COMPOSE, "logs", "--since", f"{int(time.time() - since) + 2}s"],
+                             capture_output=True, text=True, timeout=30).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    ev = re.findall(r"prompt eval time =\s+[\d.]+ ms /\s+(\d+) tokens", log)
+    return int(ev[-1]) if ev else None
+
+def send(req):
+    for attempt in range(5):  # tolerate a server that is still coming up
+        t = time.time()
+        try:
+            r = json.load(urllib.request.urlopen(urllib.request.Request(
+                f"http://127.0.0.1:{port}/v1/messages", json.dumps(req).encode(),
+                {"content-type": "application/json", "anthropic-version": "2023-06-01"}), timeout=900))
+            break
+        except urllib.error.HTTPError as e:
+            if e.code not in (502, 503) or attempt == 4:
+                raise
+            time.sleep(3)
+    wall = time.time() - t
+    time.sleep(0.3)
+    u = r.get("usage", {})
+    return u.get("cache_read_input_tokens") or 0, u.get("input_tokens") or 0, server_eval(t), wall
+
+cases = [
+    ("cold start", variant(billing("aaa")), "any"),
+    ("identical resend", variant(billing("aaa")), "hit"),
+    ("billing value changed (stripped by router)", variant(billing("bbb")), "hit"),
+    ("task text changed (like a new subagent)", variant(lambda q: (billing("ccc")(q), task(q))), "partial"),
+    ("negative control: early system edit", variant(early), "miss"),
+]
+failed = 0
+try:
+    for _ in range(50):
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=1)
+        except urllib.error.HTTPError:
+            break
+        except OSError:
+            time.sleep(0.1)
+    print(f"{'case':44s} {'expect':8s} {'cached':>7s} {'new':>6s} {'server':>7s} {'wall':>6s}  result")
+    for name, req, expect in cases:
+        cached, new, ev, wall = send(req)
+        total = cached + new
+        ok = {"any": True, "hit": new < 64, "partial": 0 < new < 0.5 * total, "miss": new > 0.8 * total}[expect]
+        ok = ok and (ev is None or ev == new)
+        failed += not ok
+        print(f"{name:44s} {expect:8s} {cached:>7} {new:>6} {ev if ev is not None else '-':>7} {wall:>5.2f}s  {'ok' if ok else 'FAIL'}")
+finally:
+    router.terminate()
+print("cache self-test", "passed" if not failed else f"FAILED ({failed} case(s))")
+sys.exit(1 if failed else 0)

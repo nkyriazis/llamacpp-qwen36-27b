@@ -1,0 +1,120 @@
+# Claude Code with local Qwen subagents
+
+Your main Claude Code session stays on Anthropic (Opus). Subagents run on the model this stack serves. Nothing is installed into `~/.claude` or into your projects: the launcher only sets environment variables for its own process and passes the agent definitions with `--agents`. Router state and logs stay in `claude-code/.state/`, which is git-ignored.
+
+```
+claude (main session, Opus) ──► router :8098 ──┬─ model == served alias ─► llama.cpp :8080 (/v1/messages)
+         └─ qwen-worker subagents ─────────────┘   auth stripped, request normalised (see below)
+                                               └─ everything else ──────► api.anthropic.com, untouched
+```
+
+## Use
+
+```
+./scripts/up                               # llama.cpp stack
+claude-code/claude-qwen                    # hybrid: normal login, plus the qwen-worker subagent
+claude-code/claude-qwen --local            # everything on the local model (no Anthropic traffic)
+claude-code/cache-report                   # prompt-cache health of the local traffic so far
+claude-code/cache-selftest                 # controlled cache checks against the server (also run by update-llamacpp)
+```
+
+Ask the main session to delegate, e.g. "use qwen-worker to add tests for X". To keep a separate Claude Code profile, set `CLAUDE_CONFIG_DIR=/some/dir` before running the launcher.
+
+### Parallel or serial
+
+There is one setting, `LLAMA_PARALLEL` in `.env`. The launcher reads the running server's `/props` (slot count, context size, model alias), so the Claude side always matches the server.
+
+| `LLAMA_PARALLEL` | server | Claude Code side |
+|---|---|---|
+| `3` (default) | 3 slots, one shared 200K KV pool | worker description says up to 3 in parallel; assumed window 68K (200K / 3) |
+| `1` | 1 slot, full 200K | worker description says one at a time; assumed window 200K. `CLAUDE_QWEN_STRICT_SERIAL=1` also sets `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=1`, which is a hard cap but applies to *all* subagents, including Anthropic-hosted ones. Claude Code has no per-agent concurrency setting. |
+
+Serial mode matters because with one slot, llama.cpp can't keep two conversations cached on this hybrid model. Parallel workers would evict each other's state on every turn (finding 4).
+
+## What is version-dependent, and where it's handled
+
+All Claude Code-specific handling is in `router.py` and works on the API structure, not on version strings. The server runs the model's stock chat template, and model names and limits come from the server.
+
+- **Mid-conversation system messages.** Claude Code sends system messages inside `messages`. The router folds them into the neighbouring user turn as `<system-reminder>` text, which any chat template accepts.
+- **Attribution/billing line.** The router removes any `x-anthropic-billing-header:` line from the system prompt of local requests, whatever its format.
+- **Auth.** The router strips auth on the local route and passes everything through untouched on the remote route.
+- **Model name, slot count, context.** The launcher reads all three from `/props` at start. The router is restarted if the served alias changes.
+- **Env vars.** The launcher only uses documented ones: `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (only affects models Claude Code doesn't recognize), `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` (opt-in), and the `ANTHROPIC_*MODEL*` variables plus `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` in `--local` mode.
+- **Regressions.** A Claude Code or llama.cpp upgrade can still add something that breaks caching. Two tools catch it:
+  - `cache-report` checks your real traffic: follow-up requests should be >90% from cache, and it lists any that weren't.
+  - `cache-selftest` checks the server and router with a synthetic Claude Code-shaped request. `scripts/update-llamacpp` runs it and rolls back on failure.
+
+## Real subscription runs (Opus 5.5 main session, isolated `CLAUDE_CONFIG_DIR` login)
+
+| run | server | what happened |
+|---|---|---|
+| one delegation | 3 slots | 3 Opus requests (all 200) and 6 Qwen requests; after the first, each Qwen request was 84–96% from cache. Opus checked the work itself, and the tests pass. |
+| three tasks | 3 slots | Opus launched 3 workers at once. They interleaved (`ABCAABBCC`), each follow-up was 80–99% from cache, and 19 tests pass. |
+| three tasks | 1 slot | Opus ran the workers one after another (`AAABBBBBCCCCCC`) from the description alone, without the hard cap: "those agents can only run one at a time". 24 tests pass. |
+
+## How cache numbers were verified
+
+Three independent signals, which must agree:
+- `cache_read_input_tokens` / `input_tokens` in llama.cpp's API response;
+- the server log's `prompt eval time = … / N tokens` for the same task;
+- wall-clock prompt time.
+
+In every run where I matched them, N equalled the reported new tokens exactly, and prompt time scaled with new tokens only (about 2–3K tok/s). A negative control is included: a one-character edit early in the system prompt must show as a full miss, and does (0 cached, 17,827 evaluated, 6.3 s, "forcing full prompt re-processing" in the log). `cache-selftest` runs these cases.
+
+## Findings
+
+Measured 2026-09-25 with Claude Code 2.1.282 and llama.cpp cd74ef6. The runs used a sandbox (`CLAUDE_CONFIG_DIR` in a scratch dir, `env -i`, a throwaway git repo) and a logging proxy. Cache numbers come from llama.cpp's `cache_read_input_tokens` and trace logs.
+
+**1. Out of the box, every request fails.**
+- **What Claude Code sends.** Two kinds of system messages inside `messages`: a `# Environment` block after the first user turn, and a `<total_tokens>` note after every tool result.
+- **Why it fails.** Qwen's template raises `System message must be at the beginning`, so llama.cpp returns HTTP 500 and Claude Code retries for about 3 minutes.
+- **No env var fixes it.** The behaviour is decided by a server-side feature flag. `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` doesn't turn it off, and the only related env var, `CLAUDE_CODE_FORCE_MID_CONVERSATION_SYSTEM`, can only force it on.
+- **The fix.** The router folds these messages into user turns. The result is still append-only, so a conversation's requests keep extending each other exactly.
+
+**2. Within one session, the prefix cache works.**
+- Each request extends the previous one; 98–99.7% of prompt tokens come from cache.
+- Thinking blocks are sent back and re-rendered.
+- Each turn re-processes only the new tool results plus a few tokens at the turn boundary.
+
+**3. Across sessions (every subagent spawn), nothing is reused unless the billing line is removed.**
+- **The cause.**
+  - The line's `cc_version` suffix differs per session (e.g. `2.1.282.2d9` vs `.7eb`).
+  - Qwen's template renders the tools first and the system text after them, which puts that per-session value just before the first user message.
+  - On a hybrid (DeltaNet) model, llama.cpp can only resume from saved checkpoints at or before the point where two prompts diverge. It saves them at user-message starts and just before the end of the prompt, both after that point.
+  - So each new session re-prefilled everything: about 14K tokens for a subagent and 18K for a main session, around 6 s.
+- **The effect of removing it.** New sessions restore the checkpoint at the first user message and process about 2.2K tokens instead of 17.8K (1.4 s instead of 7 s).
+- **Why the router, not `CLAUDE_CODE_ATTRIBUTION_HEADER=0`.** That env var would also strip the line from Anthropic traffic, where it's used to attribute usage to Claude Code.
+
+**4. Parallel subagents need parallel slots.**
+
+With one slot, llama.cpp picks the slot by longest common prefix. When a hybrid model has no usable checkpoint, it then *discards* the other conversation's state instead of saving it to the host-RAM cache.
+
+| 3 concurrent agents, same task | wall time | prompt tokens re-processed | requests re-prefilling >5K tokens |
+|---|---|---|---|
+| `--parallel 1` | 222 s | 96% | 28 of 32 |
+| `--parallel 3 --kv-unified` | 63 s | 9.7% | 3 (the cold starts) |
+
+- **Single stream:** three slots don't change single-stream speed, with MTP included (162–168 tok/s on code).
+- **VRAM:** three slots add about 0.8 GB (31.2 GB peak with a 203K-token prompt). Four don't fit.
+- **Serial runs:** with one slot and the serial setup, two delegated tasks ran strictly one after the other. This was with Qwen as the orchestrator, and both with and without the hard cap.
+
+**5. Restricting the subagent's tools matters more than any server flag.**
+- The default subagent inherits every tool: 19 in the sandbox, plus all MCP tools in a real setup. That's a 14K-token prompt before the brief.
+- With `tools: Read, Edit, Write, Bash`, it's 2.8K, and Qwen still completed the test tasks.
+
+**6. Only subagent traffic reaches the local model.** Main-session, compaction and auxiliary calls (titles, summaries) use Anthropic model names, so they stay on Anthropic. The Claude Code gateway hint headers confirmed this during testing.
+
+**7. Server flags that don't help here.**
+- `--cache-reuse` is disabled for hybrid models, and also whenever vision is loaded.
+- `--checkpoint-min-step` only spaces checkpoints; it doesn't add any during prefill. They are placed at user-message starts and at n−(4+ubatch) and n−4, per `server-context.cpp`.
+- The default 32 checkpoints per slot is enough. Each is about 210 MB of host RAM.
+
+**8. Env var notes (checked against the 2.1.282 binary).**
+- `DISABLE_NON_ESSENTIAL_MODEL_CALLS`, still quoted in guides, no longer exists.
+- A subagent's `model:` accepts any string behind a custom base URL, and `--agents` accepts `model` and `tools`.
+
+## Not verified yet
+
+- **Interactive (TUI) mode.** All runs used `claude -p`. Interactive mode's side calls go to Anthropic in hybrid mode.
+- **Long subagent sessions:** near the assumed window, subagent compaction on the local model, and a full shared KV pool.
+- **Subscription terms.** The Claude Code gateway docs describe using subscription login through a gateway set as `ANTHROPIC_BASE_URL`, and the router is a local passthrough for your own traffic. The docs don't explicitly cover this case.

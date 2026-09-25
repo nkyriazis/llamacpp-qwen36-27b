@@ -1,0 +1,38 @@
+#!/usr/bin/env python3
+"""Summarise llama.cpp prompt-cache reuse for local requests routed by claude-qwen.
+
+Reads .state/router.jsonl (metadata only). Run it after upgrading Claude Code, llama.cpp or the
+model: if something new in Claude Code's requests starts breaking prefix reuse, it shows up here
+as follow-up requests that re-process most of their prompt.
+
+  claude-code/cache-report [--since MINUTES] [log]
+"""
+import json, os, sys, time
+
+args = sys.argv[1:]
+since = None
+if args[:1] == ["--since"]:
+    since = time.time() - 60 * float(args[1]); args = args[2:]
+path = args[0] if args else os.path.join(os.path.dirname(os.path.abspath(__file__)), ".state", "router.jsonl")
+rows = []
+for line in open(path):
+    r = json.loads(line)
+    if r.get("route") == "local" and r.get("usage") and r.get("path", "").endswith("/messages") and (since is None or r["t"] >= since):
+        u = r["usage"]
+        cached = u.get("cache_read_input_tokens") or 0
+        rows.append((r, cached, (u.get("input_tokens") or 0)))
+if not rows:
+    sys.exit(f"no local requests with usage in {path}")
+starts = [x for x in rows if (x[0].get("messages") or 0) <= 1]
+follow = [x for x in rows if (x[0].get("messages") or 0) > 1]
+def pct(xs):
+    tot = sum(c + n for _, c, n in xs)
+    return 100.0 * sum(c for _, c, _ in xs) / tot if tot else 0.0
+print(f"local requests: {len(rows)}  prompt tokens from cache: {pct(rows):.1f}%")
+print(f"  conversation starts: {len(starts)}  from cache: {pct(starts):.1f}%  (first start is always cold)")
+print(f"  follow-up requests:  {len(follow)}  from cache: {pct(follow):.1f}%  (expect > 90%)")
+bad = [x for x in follow if x[2] > max(4096, 0.3 * (x[1] + x[2]))]
+for r, c, n in bad[-10:]:
+    print(f"  MISS {time.strftime('%H:%M:%S', time.localtime(r['t']))} messages={r['messages']} new={n} cached={c}")
+if bad:
+    print(f"{len(bad)} follow-up request(s) re-processed most of their prompt: look for per-request changes early in the prompt")

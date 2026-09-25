@@ -15,7 +15,7 @@ LONG = ("The quick brown fox jumps over the lazy dog. " * 3000) + "\nSummarize t
 
 def run(prompt, n_predict):
     body = json.dumps({"messages": [{"role": "user", "content": prompt}], "max_tokens": n_predict,
-                       "seed": 42, "cache_prompt": False}).encode()
+                       "seed": 42, "cache_prompt": False, "chat_template_kwargs": {"enable_thinking": False}}).encode()
     req = urllib.request.Request(URL + "/v1/chat/completions", body, {"Content-Type": "application/json"})
     t = time.time()
     r = json.load(urllib.request.urlopen(req, timeout=900))
