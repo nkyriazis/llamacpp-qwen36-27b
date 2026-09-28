@@ -18,6 +18,8 @@
 #   CLAUDE_QWEN_CONTEXT        window Claude Code assumes for the local model
 #   CLAUDE_QWEN_STRICT_SERIAL  1 = with a 1-slot server, also cap Claude Code to one subagent at a time
 #                              (CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=1; this applies to ALL subagents)
+#   CLAUDE_QWEN_MAIN_MODEL     hybrid mode: main-session model when no --model is given
+#                              (default opus[1m], Opus with the 1M window; empty = Claude Code's default)
 set -euo pipefail
 
 here="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
@@ -82,4 +84,17 @@ if [[ "$mode" == local ]]; then
   export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 fi
 
-exec claude --agents "$agents" "$@"
+# Hybrid: main session on Opus with the 1M window, unless a model is chosen explicitly.
+main_model=()
+if [[ "$mode" == hybrid && -z "${ANTHROPIC_MODEL:-}" ]]; then
+  explicit=0
+  for arg in "$@"; do
+    [[ "$arg" == --model || "$arg" == --model=* ]] && explicit=1
+  done
+  wanted="${CLAUDE_QWEN_MAIN_MODEL-opus[1m]}"
+  if [[ "$explicit" == 0 && -n "$wanted" ]]; then
+    main_model=(--model "$wanted")
+  fi
+fi
+
+exec claude --agents "$agents" "${main_model[@]}" "$@"

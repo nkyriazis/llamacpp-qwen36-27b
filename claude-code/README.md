@@ -16,7 +16,7 @@ claude (main session, Opus) ──► router :8098 ──┬─ model == served 
 
 ```
 ./scripts/up                               # llama.cpp and the claude-router service
-claude-code/claude-qwen                    # hybrid: normal login, plus the qwen-worker subagent
+claude-code/claude-qwen                    # hybrid: normal login (Opus, 1M window), plus the qwen-worker subagent
 claude-code/claude-qwen --local            # everything on the local model (no Anthropic traffic)
 claude-code/cache-report                   # prompt-cache health of the local traffic so far
 claude-code/cache-selftest                 # controlled cache checks against the server (also run by update-llamacpp)
@@ -27,6 +27,7 @@ Ask the main session to delegate, e.g. "use qwen-worker to add tests for X". To 
 ### Before you start
 
 - **Run it from your project.** The launcher works from any directory, so `cd` into the project and run it by full path, or symlink it onto your PATH (`ln -s "$PWD/claude-code/claude-qwen" ~/.local/bin/claude-qwen`). Plain `claude` is unaffected.
+- **The main session defaults to Opus with the 1M window** (`opus[1m]`). Pass `--model`, or set `CLAUDE_QWEN_MAIN_MODEL` (empty for Claude Code's default), to choose another.
 - **Only `qwen-worker` is local.** Built-in agents (Explore, general-purpose) and the main session stay on Anthropic. Ask for the worker by name.
 - **One worker at a time on the default 1 slot.** Parallel or background workers evict each other's cache and run about 3× slower (finding 4). Opus follows the worker's description. `CLAUDE_QWEN_STRICT_SERIAL=1` makes it a hard cap, for all subagents.
 - **Keep other GPU apps closed.** The server uses about 30.2 of 32.6 GB of VRAM at 262K. Games, Steam or other CUDA work can crash it with out-of-memory.
