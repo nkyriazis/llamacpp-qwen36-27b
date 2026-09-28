@@ -29,7 +29,7 @@ Ask the main session to delegate, e.g. "use qwen-worker to add tests for X". To 
 - **Run it from your project.** The launcher works from any directory, so `cd` into the project and run it by full path, or symlink it onto your PATH (`ln -s "$PWD/claude-code/claude-qwen" ~/.local/bin/claude-qwen`). Plain `claude` is unaffected.
 - **The main session defaults to Opus with the 1M window** (`opus[1m]`). Pass `--model`, or set `CLAUDE_QWEN_MAIN_MODEL` (empty for Claude Code's default), to choose another.
 - **Only `qwen-worker` is local.** Built-in agents (Explore, general-purpose) and the main session stay on Anthropic. Ask for the worker by name.
-- **One worker at a time on the default 1 slot.** Parallel or background workers evict each other's cache and run about 3× slower (finding 4). Opus follows the worker's description. `CLAUDE_QWEN_STRICT_SERIAL=1` makes it a hard cap, for all subagents.
+- **One worker at a time on the default 1 slot.** Two Qwen conversations at once evict each other's cache and run about 3× slower (finding 4). Running one in the background is fine. The launcher enforces this by capping Claude Code at one subagent at a time (`CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=1`). The cap covers Anthropic-hosted subagents too; `CLAUDE_QWEN_STRICT_SERIAL=0` turns it off and leaves only the note in the worker's description. It can't see other sessions: don't run two `claude-qwen` sessions that both delegate, or a `--local` session alongside one.
 - **Keep other GPU apps closed.** The server uses about 30.2 of 32.6 GB of VRAM at 262K. Games, Steam or other CUDA work can crash it with out-of-memory.
 - **Workers act with your session's permissions.** They run Bash and edit files, without asking if you use bypass permissions. Work in a git repo, commit before delegating, and review the diff.
 - **Have Opus verify the result.** Ask it to run the tests or read the diff instead of trusting the worker's report. After a compaction, a worker once lost track and stopped early (see the context-window section).
@@ -42,7 +42,7 @@ There is one setting, `LLAMA_PARALLEL` in `.env`. The launcher reads the running
 
 | `LLAMA_PARALLEL` | server | Claude Code side |
 |---|---|---|
-| `1` (default) | 1 slot, the full 262K context | worker description says one at a time; assumed window 262K. `CLAUDE_QWEN_STRICT_SERIAL=1` also sets `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=1`, which is a hard cap but applies to *all* subagents, including Anthropic-hosted ones. Claude Code has no per-agent concurrency setting. |
+| `1` (default) | 1 slot, the full 262K context | one subagent at a time, enforced with `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=1` (applies to *all* subagents, including Anthropic-hosted ones; Claude Code has no per-agent setting; `CLAUDE_QWEN_STRICT_SERIAL=0` disables it); assumed window 262K |
 | `3` | 3 slots sharing one 262K KV pool, ~1 GB more VRAM | worker description says up to 3 in parallel; assumed window 87K (262K / 3) |
 
 Serial mode matters because with one slot, llama.cpp can't keep two conversations cached on this hybrid model. Parallel workers would evict each other's state on every turn (finding 4).

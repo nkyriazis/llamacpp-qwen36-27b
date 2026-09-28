@@ -28,7 +28,7 @@ Setup is Claude Code on Opus as the main session, delegating coding work to suba
    - It drops the `x-anthropic-billing-header` line from the system prompt. It changes every session, so without this each new subagent re-processes its whole prompt, about 6 s, instead of reusing the cache.
 4. **One custom agent, passed with `claude --agents`.** Its `model` is the local alias and its tools are limited to `Read, Edit, Write, Bash`. The tool limit cut its starting prompt from 14K to 2.8K tokens.
 5. **Make both sides agree on the context window.** Set `CLAUDE_CODE_MAX_CONTEXT_TOKENS` to context ÷ slots (262K with one slot). Claude Code then compacts before the limit, keeping 32K spare for the reply. It only applies to model names Claude Code doesn't know, so Opus is unaffected. The router also rewrites llama.cpp's context-overflow error into Anthropic's `prompt is too long`. Without that, a subagent that overflows just dies. With it, Claude Code compacts and carries on.
-6. **For serial use**, run one slot and say "one at a time" in the agent's description. Opus followed that without any hard limit.
+6. **For serial use**, run one slot, say "one at a time" in the agent's description, and set `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=1` as a hard cap. In testing Opus followed the description alone, but the cap makes sure.
 
 ## Results
 
