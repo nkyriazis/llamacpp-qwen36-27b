@@ -36,6 +36,21 @@ Ask the main session to delegate, e.g. "use qwen-worker to add tests for X". To 
 - **After upgrading Claude Code, run `cache-selftest`.** A new version can add a per-session value that silently breaks caching. Check `cache-report` now and then. `scripts/update-llamacpp` already runs the self-test for llama.cpp updates.
 - **After a reboot**, both services restart with Docker (`restart: unless-stopped`). If the launcher says it can't reach them, run `./scripts/up`.
 
+### Delegation skill
+
+`skills/qwen-delegation/` is a Claude Code skill that tells Opus how to hand work to `qwen-worker` and how to check it. Install it once with a symlink, so edits in the repo take effect:
+
+```
+ln -s "$PWD/claude-code/skills/qwen-delegation" ~/.claude/skills/qwen-delegation
+```
+
+- **Spec first.** For bug fixes, features and speed work it runs two phases. Qwen reads the code and proposes acceptance tests. Opus reviews that spec, then Qwen implements it. Small tasks get one phase, with Opus writing the acceptance lines.
+- **Cheap default check.** Opus runs `scripts/snapshot.sh diff`, which shows what changed on disk, and reruns the agreed commands. It reads the diff only when a trigger fires (a `BLOCKED` report, changes outside the task, reserved decisions, metric targets), plus about one spot-check in five.
+- **Worker rules.** Qwen reads `worker-rules.md` before each task: stay in scope, keep what it didn't create, propose decisions, back claims with evidence, report an honest status.
+- **It learns.** Findings go into `ledger.md`, and the skill updates its own rules from them, so expect local changes there to review and commit.
+
+Evaluated over five iterations on three tasks: an impossible speed target, a handover repo full of traps, and a real more-itertools bug. Against the version before the two-phase rework, it needed 2–4× less Qwen work and was faster, with the same or better results. The runs were all `claude -p`, so interactive use is untested. The eval fixtures aren't in the repo; `evals/evals.json` describes them.
+
 ### Parallel or serial
 
 There is one setting, `LLAMA_PARALLEL` in `.env`. The launcher reads the running server's `/props` (slot count, context size, model alias), so the Claude side always matches the server.

@@ -13,7 +13,7 @@ It also runs Claude Code with local Qwen subagents behind an Anthropic-hosted ma
 - .env.example: the tuned configuration, with the measurements behind it
 - models/Qwen3.8-27B/: `Qwen3.8-27B-UD-Q4_K_XL.gguf`, `mmproj-F16.gguf` (plus optional UD-Q5_K_XL / UD-Q6_K)
 - models/Qwen3.6-27B/: `Qwen3.6-27B-Q4_K_M.gguf`, `mmproj-F16.gguf`
-- claude-code/: run Claude Code with local Qwen subagents; the router runs as the `claude-router` service, and `claude-code/claude-qwen` is the launcher. See claude-code/README.md
+- claude-code/: run Claude Code with local Qwen subagents; the router runs as the `claude-router` service, and `claude-code/claude-qwen` is the launcher, and `claude-code/skills/qwen-delegation` is the skill that tells Opus how to delegate. See claude-code/README.md
 - scripts/up, scripts/down, scripts/verify-self-contained, scripts/verify-runtime, scripts/bench, scripts/update-llamacpp
 
 ## Prerequisites
