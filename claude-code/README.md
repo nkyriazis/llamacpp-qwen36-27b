@@ -49,7 +49,7 @@ ln -s "$PWD/claude-code/skills/qwen-delegation" ~/.claude/skills/qwen-delegation
 - **Worker rules.** Qwen reads `worker-rules.md` before each task: stay in scope, keep what it didn't create, propose decisions, back claims with evidence, report an honest status.
 - **It learns.** Findings go into `ledger.md`, and the skill updates its own rules from them, so expect local changes there to review and commit.
 
-Evaluated over five iterations on three tasks: an impossible speed target, a handover repo full of traps, and a real more-itertools bug. Against the version before the two-phase rework, it needed 2–4× less Qwen work and was faster, with the same or better results. The runs were all `claude -p`, so interactive use is untested. The eval fixtures aren't in the repo; `evals/evals.json` describes them.
+Evaluated over five iterations on three tasks: an impossible speed target, a handover repo full of traps, and a real more-itertools bug. Against the version before the two-phase rework, it needed 2–4× less Qwen work and was faster, with the same or better results. The runs were all `claude -p`, so interactive use is untested. The eval definitions are in `skill-evals/qwen-delegation/evals.json`, kept outside the skill so they aren't installed with it. The fixtures and harness aren't in the repo.
 
 ### Parallel or serial
 
